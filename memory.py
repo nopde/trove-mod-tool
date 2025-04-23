@@ -1,0 +1,257 @@
+# memory.py
+import pymem
+import pymem.process
+import pymem.pattern
+import pymem.exception
+import psutil
+import re
+import time
+import win32process
+import win32gui
+import pywintypes
+from typing import Optional
+
+import config
+from entities import ResolvedAddresses
+
+
+class MemoryManager:
+    def __init__(self, process_name: str):
+        self.process_name = process_name
+        self.pm: Optional[pymem.Pymem] = None
+        self.process_id: Optional[int] = None
+        self.module_base: Optional[int] = None
+        self.noclip_address: Optional[int] = None
+        self._is_noclip_patched: bool = False
+
+    def attach(self) -> bool:
+        try:
+            self.pm = pymem.Pymem(self.process_name)
+            self.process_id = self.pm.process_id
+            module = pymem.process.module_from_name(self.pm.process_handle, self.process_name)
+            if not module:
+                print(f"Error: Could not find module {self.process_name}")
+                self.pm = None
+                return False
+            self.module_base = module.lpBaseOfDll
+            print(f"Successfully attached to {self.process_name} (PID: {self.process_id}), Base: {hex(self.module_base)}")
+            self._find_noclip_address(module)
+            return True
+        except pymem.exception.ProcessNotFound:
+            self.pm = None
+            self.process_id = None
+            self.module_base = None
+            print(f"Error: Process {self.process_name} not found.")
+            return False
+        except Exception as e:
+            self.pm = None
+            self.process_id = None
+            self.module_base = None
+            print(f"Error attaching to process: {e}")
+            return False
+
+    def detach(self):
+        if self.pm:
+            try:
+                # Restore noclip bytes if patched before closing
+                if self.noclip_address and self._is_noclip_patched:
+                    self.write_bytes(self.noclip_address, config.ORIGINAL_NOCLIP_BYTES)
+                    self._is_noclip_patched = False
+                    print("[Bypass] Restored original bytes on detach.")
+                self.pm.close_process()
+            except Exception as e:
+                print(f"Error during detach: {e}")
+            finally:
+                self.pm = None
+                self.process_id = None
+                self.module_base = None
+                self.noclip_address = None
+                print("Detached from process.")
+
+    def is_attached(self) -> bool:
+        return self.pm is not None and self.process_id is not None
+
+    def _read_uint(self, address: int) -> Optional[int]:
+        if not self.pm:
+            return None
+        try:
+            return self.pm.read_uint(address)
+        except (pymem.exception.MemoryReadError, TypeError, ValueError):
+            return None
+
+    def read_float(self, address: int) -> Optional[float]:
+        if not self.pm:
+            return None
+        try:
+            return self.pm.read_float(address)
+        except (pymem.exception.MemoryReadError, TypeError, ValueError):
+            return None
+
+    def write_float(self, address: int, value: float) -> bool:
+        if not self.pm:
+            return False
+        try:
+            self.pm.write_float(address, value)
+            return True
+        except (pymem.exception.MemoryWriteError, TypeError, ValueError):
+            return False
+
+    def write_bytes(self, address: int, value: bytes) -> bool:
+        if not self.pm:
+            return False
+        try:
+            self.pm.write_bytes(address, value, len(value))
+            return True
+        except (pymem.exception.MemoryWriteError, TypeError, ValueError):
+            return False
+
+    def _resolve_pointer_chain(self, base_address: int, offsets: list[int]) -> Optional[int]:
+        if not self.pm:
+            return None
+        try:
+            addr = self._read_uint(base_address)
+            if addr is None:
+                return None
+            for i, offset in enumerate(offsets[:-1]):
+                addr = self._read_uint(addr + offset)
+                if addr is None or addr < 0x1000:  # Basic sanity check
+                    print(f"Pointer chain failed at offset index {i}")
+                    return None
+            # Last offset is added to the final resolved address
+            return addr + offsets[-1]
+        except (pymem.exception.MemoryReadError, TypeError, ValueError):
+            print("Error resolving pointer chain")
+            return None
+
+    def resolve_addresses(self) -> Optional[ResolvedAddresses]:
+        if not self.pm or not self.module_base:
+            return None
+
+        try:
+            # Read the initial static pointer relative to the module base
+            chain_start_addr = self._read_uint(self.module_base + config.STATIC_POINTER_START_OFFSET)
+            if not chain_start_addr:
+                print("Failed to read chain start address")
+                return None
+
+            # Resolve Velocity Pointers
+            vel_ptr1 = self._read_uint(chain_start_addr + 0x0)
+            if not vel_ptr1:
+                return None
+            vel_ptr2 = self._read_uint(vel_ptr1 + 0x28)
+            if not vel_ptr2:
+                return None
+            vel_ptr3 = self._read_uint(vel_ptr2 + 0xE8)
+            if not vel_ptr3:
+                return None
+            coord_vel_base_addr = self._read_uint(vel_ptr3 + 0x4)
+            if not coord_vel_base_addr or coord_vel_base_addr < 0x1000:
+                print("Failed to resolve velocity base address")
+                return None
+
+            # Resolve Camera Pointers
+            cam_ptr1 = self._read_uint(chain_start_addr + 0x4)
+            if not cam_ptr1:
+                return None
+            cam_ptr2 = self._read_uint(cam_ptr1 + 0x24)
+            if not cam_ptr2:
+                return None
+            cam_ptr3 = self._read_uint(cam_ptr2 + 0x84)
+            if not cam_ptr3:
+                return None
+            cam_base_addr = self._read_uint(cam_ptr3 + 0x0)
+            if not cam_base_addr or cam_base_addr < 0x1000:
+                print("Failed to resolve camera base address")
+                return None
+
+            return ResolvedAddresses(
+                velocity_x=coord_vel_base_addr + 0xB0,
+                velocity_y=coord_vel_base_addr + 0xB4,
+                velocity_z=coord_vel_base_addr + 0xB8,
+                camera_x=cam_base_addr + 0x100,
+                camera_y=cam_base_addr + 0x104,
+                camera_z=cam_base_addr + 0x108,
+            )
+        except (pymem.exception.MemoryReadError, TypeError, ValueError, AttributeError):
+            print("Exception during pointer resolution")
+            return None
+
+    def _aob_to_bytes(self, pattern: str) -> bytes:
+        return bytes(int(b, 16) for b in re.findall(r"[0-9A-Fa-f]{2}", pattern))
+
+    def _find_noclip_address(self, module) -> None:
+        if not self.pm:
+            return
+        try:
+            pattern_bytes = self._aob_to_bytes(config.NOCLIP_AOB_PATTERN)
+            self.noclip_address = pymem.pattern.pattern_scan_module(self.pm.process_handle, module, pattern_bytes, return_multiple=False)
+            if self.noclip_address:
+                print(f"[Bypass] Address found: {hex(self.noclip_address)}")
+            else:
+                print("[Bypass] WARNING! Pattern not found.")
+        except Exception as e:
+            print(f"[Bypass] Error scanning for pattern: {e}")
+            self.noclip_address = None
+
+    def is_moving(self, addresses: ResolvedAddresses) -> bool:
+        """Check if the player has significant velocity in memory."""
+        if not self.pm or not addresses:
+            return False
+        try:
+            vx = abs(self.read_float(addresses.velocity_x) or 0.0)
+            vy = abs(self.read_float(addresses.velocity_y) or 0.0)
+            vz = abs(self.read_float(addresses.velocity_z) or 0.0)
+            # Use a small threshold to account for floating point inaccuracies or slight drift
+            threshold = 0.1
+            return vx > threshold or vy > threshold or vz > threshold
+        except Exception:
+            return False  # Assume not moving if read fails
+
+    def update_noclip_patch(self, should_be_moving: bool):
+        if not self.pm or not self.noclip_address:
+            return
+
+        try:
+            if should_be_moving and not self._is_noclip_patched:
+                if self.write_bytes(self.noclip_address, config.PATCHED_NOCLIP_BYTES):
+                    self._is_noclip_patched = True
+            elif not should_be_moving and self._is_noclip_patched:
+                if self.write_bytes(self.noclip_address, config.ORIGINAL_NOCLIP_BYTES):
+                    self._is_noclip_patched = False
+        except Exception as e:
+            print(f"[Bypass] Error updating patch status: {e}")
+            # Disable bypass if patching fails critically
+            self.noclip_address = None
+
+
+# --- Static Utility Functions ---
+
+
+def is_process_running(process_name: str) -> bool:
+    for p in psutil.process_iter(["name"]):
+        try:
+            if p.info["name"] == process_name:
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+    return False
+
+
+def wait_for_process(process_name: str, interval_s: float = 1.0):
+    print(f"Waiting for process {process_name}...")
+    while not is_process_running(process_name):
+        time.sleep(interval_s)
+    print(f"Process {process_name} found.")
+
+
+def get_foreground_process_pid() -> Optional[int]:
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        if not hwnd:
+            return None
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        return pid
+    except (pywintypes.error, OSError, AttributeError):
+        # AttributeError can happen if win32gui functions aren't available
+        print("Warning: Could not get foreground window PID. win32gui might be missing or failed.")
+        return None
