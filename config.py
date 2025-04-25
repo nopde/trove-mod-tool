@@ -31,5 +31,4 @@ class Configuration:
     jump_force: float = 25.0
 
 
-# --- Global Config Instance ---
-app_config = Configuration()
+app_config: Configuration = None  # Global app config, set in main.py

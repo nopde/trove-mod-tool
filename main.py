@@ -14,6 +14,8 @@ def run():
     current_addresses: ResolvedAddresses | None = None
     last_resolve_time = 0
 
+    config.app_config = config.Configuration()  # Initialize config
+
     try:
         input_handler.setup_hotkeys()
 
@@ -50,16 +52,15 @@ def run():
                     continue
 
             # --- Hack Application Logic ---
-            app_cfg = config.app_config  # Get current config state
-            if app_cfg.hack_on and current_addresses:
+            if config.app_config.hack_on and current_addresses:
                 foreground_pid = memory.get_foreground_process_pid()
                 is_target_active = foreground_pid is not None and foreground_pid == mem_manager.process_id
 
                 if is_target_active:
                     try:
-                        if app_cfg.current_hack == config.HackMode.ACCELBOOST:
+                        if config.app_config.current_hack == config.HackMode.ACCELBOOST:
                             hacks.apply_accelboost(mem_manager, current_addresses)
-                        elif app_cfg.current_hack == config.HackMode.FLY:
+                        elif config.app_config.current_hack == config.HackMode.FLY:
                             hacks.apply_fly(mem_manager, current_addresses)
 
                         # --- Noclip Bypass Logic ---
