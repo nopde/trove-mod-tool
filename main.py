@@ -1,6 +1,7 @@
 # main.py
 import time
 import pymem
+import sys
 
 import config
 import memory
@@ -15,8 +16,16 @@ def run():
     last_resolve_time = 0
 
     config.app_config = config.Configuration()  # Initialize config
+    pointerResolutionFailed: bool = True
 
     try:
+        print("--==* Trove Modification Tool *==--")
+        print("- F3: Toggle Hack")
+        print("- F4: Change Hack Mode (AccelBoost/Fly)")
+        print("- PgUp: Increase Speed")
+        print("- PgDown: Decrease Speed")
+        print("--===============================--", end="\n\n")
+        
         input_handler.setup_hotkeys()
 
         while True:
@@ -41,15 +50,26 @@ def run():
             current_time = time.time()
             if not current_addresses or (current_time - last_resolve_time > config.POINTER_RESOLVE_INTERVAL_S):
                 resolved = mem_manager.resolve_addresses()
-                if resolved:
-                    current_addresses = resolved
-                    last_resolve_time = current_time
-                else:
-                    # Failed to resolve, maybe player is zoning or in menu?
+
+                if not resolved:
+                    pointerResolutionFailed = True
                     current_addresses = None
-                    print("Failed to resolve pointers, retrying...")
-                    time.sleep(0.5)  # Wait a bit longer if resolution fails
+
+                    retry_secs = 2
+                    for remaining in range(retry_secs, 0, -1):
+                        sys.stdout.write(f"\rFailed to resolve pointers. Retrying in {remaining} seconds...")
+                        sys.stdout.flush()
+                        time.sleep(1)
+
+                    sys.stdout.write("\r" + " " * 60 + "\r")
+                    sys.stdout.flush()
                     continue
+
+                current_addresses = resolved
+                last_resolve_time = current_time
+                if pointerResolutionFailed:
+                    pointerResolutionFailed = False
+                    print("Successfully resolved pointers.")
 
             # --- Hack Application Logic ---
             if config.app_config.hack_on and current_addresses:

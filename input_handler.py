@@ -48,7 +48,6 @@ def setup_hotkeys():
     keyboard.add_hotkey("F4", change_mode)
     keyboard.add_hotkey("page up", increase_speed)
     keyboard.add_hotkey("page down", decrease_speed)
-    print("Hotkeys registered: F3 (Toggle), F4 (Mode), PgUp (Speed+), PgDown (Speed-)")
 
 
 def remove_hotkeys():
