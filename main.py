@@ -25,7 +25,7 @@ def run():
         print("- PgUp: Increase Speed")
         print("- PgDown: Decrease Speed")
         print("--===============================--", end="\n\n")
-        
+
         input_handler.setup_hotkeys()
 
         while True:
@@ -54,21 +54,16 @@ def run():
                 if not resolved:
                     pointerResolutionFailed = True
                     current_addresses = None
-
-                    retry_secs = 2
-                    for remaining in range(retry_secs, 0, -1):
-                        sys.stdout.write(f"\rFailed to resolve pointers. Retrying in {remaining} seconds...")
-                        sys.stdout.flush()
-                        time.sleep(1)
-
-                    sys.stdout.write("\r" + " " * 60 + "\r")
+                    sys.stdout.write("\rFailed to resolve pointers. Retrying...")
                     sys.stdout.flush()
+                    time.sleep(1)
                     continue
 
                 current_addresses = resolved
                 last_resolve_time = current_time
                 if pointerResolutionFailed:
                     pointerResolutionFailed = False
+                    sys.stdout.write("\r" + " " * 60 + "\r")
                     print("Successfully resolved pointers.")
 
             # --- Hack Application Logic ---
