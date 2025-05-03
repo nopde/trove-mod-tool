@@ -2,6 +2,7 @@
 import time
 import pymem
 import sys
+import logging
 
 import config
 import memory
@@ -18,14 +19,22 @@ def run():
     config.app_config = config.Configuration()  # Initialize config
     pointerResolutionFailed: bool = True
 
-    try:
-        print("--==* Trove Modification Tool *==--")
-        print("- F3: Toggle Hack")
-        print("- F4: Change Hack Mode (AccelBoost/Fly)")
-        print("- PgUp: Increase Speed")
-        print("- PgDown: Decrease Speed")
-        print("--===============================--", end="\n\n")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(levelname)s] %(message)s",
+        handlers=[logging.FileHandler("trove_mod_tool.log"), logging.StreamHandler(sys.stdout)],
+        force=True,
+        encoding="utf-8",
+    )
 
+    logging.info("--==* Trove Modification Tool *==--")
+    logging.info("- F3: Toggle Hack")
+    logging.info("- F4: Change Hack Mode (AccelBoost/Fly)")
+    logging.info("- PgUp: Increase Speed")
+    logging.info("- PgDown: Decrease Speed")
+    logging.info("--===============================--")
+
+    try:
         input_handler.setup_hotkeys()
 
         while True:
@@ -33,7 +42,7 @@ def run():
             if not mem_manager.is_attached():
                 memory.wait_for_process(config.PROCESS_NAME)
                 if not mem_manager.attach():
-                    print("Failed to attach to process. Retrying in 5 seconds...")
+                    logging.warning("Failed to attach to process. Retrying in 5 seconds...")
                     time.sleep(5)
                     continue  # Retry attaching
                 # Reset state on successful attach/reattach
@@ -42,7 +51,7 @@ def run():
 
             # Check if process is still running
             if not memory.is_process_running(config.PROCESS_NAME):
-                print("Target process has closed.")
+                logging.info("Target process has closed.")
                 mem_manager.detach()
                 continue  # Go back to waiting for process
 
@@ -54,8 +63,7 @@ def run():
                 if not resolved:
                     pointerResolutionFailed = True
                     current_addresses = None
-                    sys.stdout.write("\rFailed to resolve pointers. Retrying...")
-                    sys.stdout.flush()
+                    logging.warning("Failed to resolve pointers. Retrying...")
                     time.sleep(1)
                     continue
 
@@ -63,8 +71,7 @@ def run():
                 last_resolve_time = current_time
                 if pointerResolutionFailed:
                     pointerResolutionFailed = False
-                    sys.stdout.write("\r" + " " * 60 + "\r")
-                    print("Successfully resolved pointers.")
+                    logging.info("Successfully resolved pointers.")
 
             # --- Hack Application Logic ---
             if config.app_config.hack_on and current_addresses:
@@ -83,25 +90,25 @@ def run():
                         mem_manager.update_noclip_patch(should_be_moving=is_actively_moving)
 
                     except (pymem.exception.MemoryReadError, pymem.exception.MemoryWriteError) as e:
-                        print(f"Memory access error during hack loop: {e}. Detaching...")
+                        logging.error(f"Memory access error during hack loop: {e}. Detaching...")
                         mem_manager.detach()  # Detach on critical memory error
                         current_addresses = None  # Force re-resolve after reattach
                     except Exception as e:
-                        print(f"Unexpected error in hack loop: {e}")
+                        logging.error(f"Unexpected error in hack loop: {e}")
 
             # --- Loop Timing ---
             time.sleep(config.INTERVAL_MS / 1000.0)
 
     except KeyboardInterrupt:
-        print("\nCtrl+C detected. Exiting...")
+        logging.info("\nCtrl+C detected. Exiting...")
     except Exception as e:
-        print(f"\nAn unhandled exception occurred: {e}")
+        logging.error(f"\nAn unhandled exception occurred: {e}")
     finally:
-        print("Cleaning up...")
+        logging.info("Cleaning up...")
         input_handler.remove_hotkeys()
         if mem_manager.is_attached():
             mem_manager.detach()
-        print("Exited.")
+        logging.info("Exited.")
 
 
 if __name__ == "__main__":

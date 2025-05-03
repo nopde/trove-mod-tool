@@ -9,6 +9,7 @@ import time
 import win32process
 import win32gui
 import pywintypes
+import logging
 from typing import Optional
 
 import config
@@ -30,24 +31,24 @@ class MemoryManager:
             self.process_id = self.pm.process_id
             module = pymem.process.module_from_name(self.pm.process_handle, self.process_name)
             if not module:
-                print(f"Error: Could not find module {self.process_name}")
+                logging.error(f"Error: Could not find module {self.process_name}")
                 self.pm = None
                 return False
             self.module_base = module.lpBaseOfDll
-            print(f"Successfully attached to {self.process_name} (PID: {self.process_id}), Base: {hex(self.module_base)}")
+            logging.info(f"Successfully attached to {self.process_name} (PID: {self.process_id}), Base: {hex(self.module_base)}")
             self._find_noclip_address(module)
             return True
         except pymem.exception.ProcessNotFound:
             self.pm = None
             self.process_id = None
             self.module_base = None
-            print(f"Error: Process {self.process_name} not found.")
+            logging.error(f"Error: Process {self.process_name} not found.")
             return False
         except Exception as e:
             self.pm = None
             self.process_id = None
             self.module_base = None
-            print(f"Error attaching to process: {e}")
+            logging.error(f"Error attaching to process: {e}")
             return False
 
     def detach(self):
@@ -57,16 +58,16 @@ class MemoryManager:
                 if self.noclip_address and self._is_noclip_patched:
                     self.write_bytes(self.noclip_address, config.ORIGINAL_NOCLIP_BYTES)
                     self._is_noclip_patched = False
-                    print("[Bypass] Restored original bytes on detach.")
+                    logging.info("[Bypass] Restored original bytes on detach.")
                 self.pm.close_process()
             except Exception as e:
-                print(f"Error during detach: {e}")
+                logging.error(f"Error during detach: {e}")
             finally:
                 self.pm = None
                 self.process_id = None
                 self.module_base = None
                 self.noclip_address = None
-                print("Detached from process.")
+                logging.info("Detached from process.")
 
     def is_attached(self) -> bool:
         return self.pm is not None and self.process_id is not None
@@ -115,12 +116,12 @@ class MemoryManager:
             for i, offset in enumerate(offsets[:-1]):
                 addr = self._read_uint(addr + offset)
                 if addr is None or addr < 0x1000:  # Basic sanity check
-                    print(f"Pointer chain failed at offset index {i}")
+                    logging.error(f"Pointer chain failed at offset index {i}")
                     return None
             # Last offset is added to the final resolved address
             return addr + offsets[-1]
         except (pymem.exception.MemoryReadError, TypeError, ValueError):
-            print("Error resolving pointer chain")
+            logging.error("Error resolving pointer chain")
             return None
 
     def resolve_addresses(self) -> Optional[ResolvedAddresses]:
@@ -131,7 +132,7 @@ class MemoryManager:
             # Read the initial static pointer relative to the module base
             chain_start_addr = self._read_uint(self.module_base + config.STATIC_POINTER_START_OFFSET)
             if not chain_start_addr:
-                print("Failed to read chain start address")
+                logging.error("Failed to read chain start address")
                 return None
 
             # Resolve Velocity Pointers
@@ -146,7 +147,7 @@ class MemoryManager:
                 return None
             coord_vel_base_addr = self._read_uint(vel_ptr3 + 0x4)
             if not coord_vel_base_addr or coord_vel_base_addr < 0x1000:
-                print("Failed to resolve velocity base address")
+                logging.error("Failed to resolve velocity base address")
                 return None
 
             # Resolve Camera Pointers
@@ -161,7 +162,7 @@ class MemoryManager:
                 return None
             cam_base_addr = self._read_uint(cam_ptr3 + 0x0)
             if not cam_base_addr or cam_base_addr < 0x1000:
-                print("Failed to resolve camera base address")
+                logging.error("Failed to resolve camera base address")
                 return None
 
             return ResolvedAddresses(
@@ -173,7 +174,7 @@ class MemoryManager:
                 camera_z=cam_base_addr + 0x108,
             )
         except (pymem.exception.MemoryReadError, TypeError, ValueError, AttributeError):
-            print("Exception during pointer resolution")
+            logging.error("Exception during pointer resolution")
             return None
 
     def _aob_to_bytes(self, pattern: str) -> bytes:
@@ -186,11 +187,11 @@ class MemoryManager:
             pattern_bytes = self._aob_to_bytes(config.NOCLIP_AOB_PATTERN)
             self.noclip_address = pymem.pattern.pattern_scan_module(self.pm.process_handle, module, pattern_bytes, return_multiple=False)
             if self.noclip_address:
-                print(f"[Bypass] Address found: {hex(self.noclip_address)}")
+                logging.info(f"[Bypass] Address found: {hex(self.noclip_address)}")
             else:
-                print("[Bypass] WARNING! Pattern not found.")
+                logging.warning("[Bypass] Pattern not found.")
         except Exception as e:
-            print(f"[Bypass] Error scanning for pattern: {e}")
+            logging.error(f"[Bypass] Error scanning for pattern: {e}")
             self.noclip_address = None
 
     def is_moving(self, addresses: ResolvedAddresses) -> bool:
@@ -219,7 +220,7 @@ class MemoryManager:
                 if self.write_bytes(self.noclip_address, config.ORIGINAL_NOCLIP_BYTES):
                     self._is_noclip_patched = False
         except Exception as e:
-            print(f"[Bypass] Error updating patch status: {e}")
+            logging.error(f"[Bypass] Error updating patch status: {e}")
             # Disable bypass if patching fails critically
             self.noclip_address = None
 
@@ -238,10 +239,10 @@ def is_process_running(process_name: str) -> bool:
 
 
 def wait_for_process(process_name: str, interval_s: float = 1.0):
-    print(f"Waiting for process {process_name}...")
+    logging.info(f"Waiting for process {process_name}...")
     while not is_process_running(process_name):
         time.sleep(interval_s)
-    print(f"Process {process_name} found.")
+    logging.info(f"Process {process_name} found.")
 
 
 def get_foreground_process_pid() -> Optional[int]:
@@ -253,5 +254,5 @@ def get_foreground_process_pid() -> Optional[int]:
         return pid
     except (pywintypes.error, OSError, AttributeError):
         # AttributeError can happen if win32gui functions aren't available
-        print("Warning: Could not get foreground window PID. win32gui might be missing or failed.")
+        logging.warning("Could not get foreground window PID. win32gui might be missing or failed.")
         return None

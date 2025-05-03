@@ -1,12 +1,13 @@
 # input_handler.py
 import keyboard
 import config
+import logging
 
 
 def toggle_hack():
     config.app_config.hack_on = not config.app_config.hack_on
     status = "ON" if config.app_config.hack_on else "OFF"
-    print(f"Hack toggled {status}")
+    logging.info(f"Hack toggled to {status}")
 
 
 def change_mode():
@@ -18,17 +19,17 @@ def change_mode():
     else:
         cfg.current_hack = config.HackMode.ACCELBOOST
 
-    print(f"Hack mode changed to {cfg.current_hack.name}")
+    logging.info(f"Hack mode changed to {cfg.current_hack.name}")
 
 
 def increase_speed():
     cfg = config.app_config
     if cfg.current_hack == config.HackMode.ACCELBOOST:
         cfg.accel_boost_speed += 5.0
-        print(f"AccelBoost speed increased to {cfg.accel_boost_speed:.1f}")
+        logging.info(f"AccelBoost speed increased to {cfg.accel_boost_speed:.1f}")
     elif cfg.current_hack == config.HackMode.FLY:
         cfg.fly_speed += 5.0
-        print(f"Fly speed increased to {cfg.fly_speed:.1f}")
+        logging.info(f"Fly speed increased to {cfg.fly_speed:.1f}")
 
 
 def decrease_speed():
@@ -37,10 +38,10 @@ def decrease_speed():
     min_speed = 5.0
     if cfg.current_hack == config.HackMode.ACCELBOOST:
         cfg.accel_boost_speed = max(min_speed, cfg.accel_boost_speed - 5.0)
-        print(f"AccelBoost speed decreased to {cfg.accel_boost_speed:.1f}")
+        logging.info(f"AccelBoost speed decreased to {cfg.accel_boost_speed:.1f}")
     elif cfg.current_hack == config.HackMode.FLY:
         cfg.fly_speed = max(min_speed, cfg.fly_speed - 5.0)
-        print(f"Fly speed decreased to {cfg.fly_speed:.1f}")
+        logging.info(f"Fly speed decreased to {cfg.fly_speed:.1f}")
 
 
 def setup_hotkeys():
@@ -56,9 +57,9 @@ def remove_hotkeys():
         keyboard.remove_hotkey("F4")
         keyboard.remove_hotkey("page up")
         keyboard.remove_hotkey("page down")
-        print("Hotkeys removed.")
+        logging.info("Hotkeys removed.")
     except KeyError:
         # This can happen if hotkeys were somehow not registered
-        print("Warning: Could not remove all hotkeys (might have been cleared already).")
+        logging.warning("Could not remove all hotkeys (might have been cleared already).")
     except Exception as e:
-        print(f"Error removing hotkeys: {e}")
+        logging.error(f"Error removing hotkeys: {e}")
