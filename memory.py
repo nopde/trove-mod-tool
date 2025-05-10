@@ -108,21 +108,18 @@ class MemoryManager:
 
     def _resolve_pointer_chain(self, base_address: int, offsets: list[int]) -> Optional[int]:
         if not self.pm:
-            return None
+            return False
         try:
-            addr = self._read_uint(base_address)
-            if addr is None:
-                return None
-            for i, offset in enumerate(offsets[:-1]):
+            addr = base_address
+            for offset in offsets:
                 addr = self._read_uint(addr + offset)
-                if addr is None or addr < 0x1000:  # Basic sanity check
-                    logging.error(f"Pointer chain failed at offset index {i}")
+                if addr is None:
+                    logging.error(f"Pointer chain failed at offset '{offset}'.")
                     return None
-            # Last offset is added to the final resolved address
-            return addr + offsets[-1]
         except (pymem.exception.MemoryReadError, TypeError, ValueError):
             logging.error("Error resolving pointer chain")
-            return None
+            return False
+        return addr
 
     def resolve_addresses(self) -> Optional[ResolvedAddresses]:
         if not self.pm or not self.module_base:
@@ -136,33 +133,16 @@ class MemoryManager:
                 return None
 
             # Resolve Velocity Pointers
-            vel_ptr1 = self._read_uint(chain_start_addr + 0x0)
-            if not vel_ptr1:
-                return None
-            vel_ptr2 = self._read_uint(vel_ptr1 + 0x28)
-            if not vel_ptr2:
-                return None
-            vel_ptr3 = self._read_uint(vel_ptr2 + 0xE8)
-            if not vel_ptr3:
-                return None
-            coord_vel_base_addr = self._read_uint(vel_ptr3 + 0x4)
-            if not coord_vel_base_addr or coord_vel_base_addr < 0x1000:
+            coord_vel_base_addr = self._resolve_pointer_chain(chain_start_addr, config.VELOCITY_OFFSETS)
+            if not coord_vel_base_addr:
                 logging.error("Failed to resolve velocity base address")
                 return None
 
+
             # Resolve Camera Pointers
-            cam_ptr1 = self._read_uint(chain_start_addr + 0x4)
-            if not cam_ptr1:
-                return None
-            cam_ptr2 = self._read_uint(cam_ptr1 + 0x24)
-            if not cam_ptr2:
-                return None
-            cam_ptr3 = self._read_uint(cam_ptr2 + 0x84)
-            if not cam_ptr3:
-                return None
-            cam_base_addr = self._read_uint(cam_ptr3 + 0x0)
-            if not cam_base_addr or cam_base_addr < 0x1000:
-                logging.error("Failed to resolve camera base address")
+            cam_base_addr = self._resolve_pointer_chain(chain_start_addr, config.CAMERA_OFFSETS)
+            if not cam_base_addr:
+                logging.error("Failed to resolve camera base address.")
                 return None
 
             return ResolvedAddresses(
@@ -173,8 +153,8 @@ class MemoryManager:
                 camera_y=cam_base_addr + 0x104,
                 camera_z=cam_base_addr + 0x108,
             )
-        except (pymem.exception.MemoryReadError, TypeError, ValueError, AttributeError):
-            logging.error("Exception during pointer resolution")
+        except (pymem.exception.MemoryReadError, TypeError, ValueError, AttributeError) as e:
+            logging.error(f"Exception during pointer resolution: {e}")
             return None
 
     def _aob_to_bytes(self, pattern: str) -> bytes:
