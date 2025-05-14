@@ -23,6 +23,7 @@ class MemoryManager:
         self.process_id: Optional[int] = None
         self.module_base: Optional[int] = None
         self.noclip_address: Optional[int] = None
+        self.localplayer_ptr: Optional[int] = None
         self._is_noclip_patched: bool = False
 
     def attach(self) -> bool:
@@ -37,6 +38,7 @@ class MemoryManager:
             self.module_base = module.lpBaseOfDll
             logging.info(f"Successfully attached to {self.process_name} (PID: {self.process_id}), Base: {hex(self.module_base)}")
             self._find_noclip_address(module)
+            self._find_localplayer_pointer(module)
             return True
         except pymem.exception.ProcessNotFound:
             self.pm = None
@@ -116,8 +118,8 @@ class MemoryManager:
                 if addr is None:
                     logging.error(f"Pointer chain failed at offset '{offset}'.")
                     return None
-        except (pymem.exception.MemoryReadError, TypeError, ValueError):
-            logging.error("Error resolving pointer chain")
+        except (pymem.exception.MemoryReadError, TypeError, ValueError) as e:
+            logging.error(f"Error resolving pointer chain: {e}")
             return False
         return addr
 
@@ -127,7 +129,7 @@ class MemoryManager:
 
         try:
             # Read the initial static pointer relative to the module base
-            chain_start_addr = self._read_uint(self.module_base + config.STATIC_POINTER_START_OFFSET)
+            chain_start_addr = self._read_uint(self.module_base + self.localplayer_ptr)
             if not chain_start_addr:
                 logging.error("Failed to read chain start address")
                 return None
@@ -137,7 +139,6 @@ class MemoryManager:
             if not coord_vel_base_addr:
                 logging.error("Failed to resolve velocity base address")
                 return None
-
 
             # Resolve Camera Pointers
             cam_base_addr = self._resolve_pointer_chain(chain_start_addr, config.CAMERA_OFFSETS)
@@ -164,15 +165,59 @@ class MemoryManager:
         if not self.pm:
             return
         try:
-            pattern_bytes = self._aob_to_bytes(config.NOCLIP_AOB_PATTERN)
-            self.noclip_address = pymem.pattern.pattern_scan_module(self.pm.process_handle, module, pattern_bytes, return_multiple=False)
-            if self.noclip_address:
+            noclip_addresses = self._aob_scan(module, config.NOCLIP_AOB_PATTERN)
+            if noclip_addresses:
+                self.noclip_address = noclip_addresses[0]
                 logging.info(f"[Bypass] Address found: {hex(self.noclip_address)}")
             else:
                 logging.warning("[Bypass] Pattern not found.")
         except Exception as e:
             logging.error(f"[Bypass] Error scanning for pattern: {e}")
             self.noclip_address = None
+
+    def _pattern_to_bytes(self, pattern: str) -> bytes:
+        parts = pattern.split()
+        byte_array = []
+        for part in parts:
+            if part == '??':
+                byte_array.append(None)
+            else:
+                byte_array.append(int(part, 16))
+        return byte_array
+
+
+    def _aob_scan(self, module, pattern: str) -> Optional[int]:
+        base_address = module.lpBaseOfDll
+        module_size = module.SizeOfImage
+
+        bytes_memory = self.pm.read_bytes(base_address, module_size)
+        pattern_bytes = self._pattern_to_bytes(pattern)
+
+        results = []
+
+        for i in range(len(bytes_memory) - len(pattern_bytes) + 1):
+            match = True
+            for j in range(len(pattern_bytes)):
+                if pattern_bytes[j] is not None and bytes_memory[i + j] != pattern_bytes[j]:
+                    match = False
+                    break
+            if match:
+                results.append(base_address + i)
+
+        return results
+
+    def _find_localplayer_pointer(self, module) -> None:
+        if not self.pm:
+            return
+        try:
+            localplayer_ptrs = self._aob_scan(module, config.LOCALPLAYER_AOB_PATTERN)
+            if localplayer_ptrs:
+                self.localplayer_ptr = self._read_uint(localplayer_ptrs[0] + 1) - module.lpBaseOfDll
+                logging.info(f"[LocalPlayer] Address found: {hex(self.localplayer_ptr)}")
+            else:
+                logging.warning("[LocalPlayer] Pattern not found.")
+        except Exception as e:
+            logging.error(f"[LocalPlayer] Error scanning for pattern: {e}")
 
     def is_moving(self, addresses: ResolvedAddresses) -> bool:
         """Check if the player has significant velocity in memory."""
